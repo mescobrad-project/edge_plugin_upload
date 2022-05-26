@@ -5,5 +5,5 @@
     "type": "utils",
     "version": "v0.0.1",
     "url": "https://github.com/mescobrad-project/edge-plugin-upload",
-    "entry-point": "demo-plugin.py"
+    "entry-point": "entrypoint.py"
 }
