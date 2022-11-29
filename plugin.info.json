@@ -1,9 +1,9 @@
 {
-    "id":"upload-plugin",
-    "name": "Upload Plugin",
+    "id":"edge_plugin_upload",
+    "name": "upload_plugin",
     "description": "Upload a file within an S3-compliant object storage",
     "type": "utils",
     "version": "v0.0.1",
-    "url": "https://github.com/mescobrad-project/edge-plugin-upload",
+    "url": "https://github.com/mescobrad-project/edge_plugin_upload",
     "entry-point": "entrypoint.py"
 }
