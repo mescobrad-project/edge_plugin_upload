@@ -37,6 +37,6 @@ class GenericPlugin(EmptyPlugin):
             data = self.__load__(file)
             obj_name = self.__OBJ_STORAGE_ARTEFACT_TEMPLATE_LOCAL__.replace('{name}', file)
             # Upload updated data
-            s3_local.Bucket(self.__OBJ_STORAGE_BUCKET__).upload_fileobj(BytesIO(data), obj_name, ExtraArgs={'ContentType': input_meta.file_content_type})
+            s3_local.Bucket(self.__OBJ_STORAGE_BUCKET_LOCAL__).upload_fileobj(BytesIO(data), obj_name, ExtraArgs={'ContentType': input_meta.file_content_type})
 
         return PluginActionResponse()
