@@ -39,7 +39,7 @@ class GenericPlugin(EmptyPlugin):
 
         return data
 
-    def upload_data_on_trino(self, schema_name, data, conn):
+    def upload_data_on_trino(self, schema_name, table_name, data, conn):
         """Create sql statement for inserting data and update
         the table with data"""
 
@@ -50,8 +50,8 @@ class GenericPlugin(EmptyPlugin):
         data_to_insert = ", ".join(data_list)
 
         # Insert data into the table
-        sql_statement = "INSERT INTO iceberg.{schema_name}.csv_anonymized_data VALUES {data}"\
-            .format(schema_name=schema_name, data=data_to_insert)
+        sql_statement = "INSERT INTO iceberg.{schema_name}.{table_name} VALUES {data}"\
+            .format(schema_name=schema_name, table_name=table_name, data=data_to_insert)
         self.execute_sql_on_trino(sql=sql_statement, conn=conn)
 
     def action(self, input_meta: PluginExchangeMetadata = None) -> PluginActionResponse:
@@ -84,18 +84,8 @@ class GenericPlugin(EmptyPlugin):
         # with "_"
         schema_name = self.__OBJ_STORAGE_BUCKET__.replace("-", "_")
 
-        # Create the schema if doesn't exists
-        sql_create_schema = "CREATE SCHEMA IF NOT EXISTS iceberg.{schema_name} \
-            WITH (location = 's3a://{minio_bucket}/')".format(schema_name=schema_name,
-                                                              minio_bucket=self.__OBJ_STORAGE_BUCKET__)
-        self.execute_sql_on_trino(sql=sql_create_schema, conn=conn)
-
-        # If table doesn't exist create the table named 'csv_anonymized_data' within
-        # created schema
-        sql_create_table = "CREATE TABLE IF NOT EXISTS iceberg.{name}.csv_anonymized_data \
-                                (source varchar, rowid int, variable_name varchar, variable_value varchar) \
-                              WITH (format = 'PARQUET')".format(name=schema_name)
-        self.execute_sql_on_trino(sql=sql_create_table, conn=conn)
+        # Get the table name
+        table_name = self.__OBJ_STORAGE_TABLE__.replace("-", "_")
 
         # Path to the anonymized file
         obj_name_template = "anonymous_data/{name}"
@@ -117,7 +107,7 @@ class GenericPlugin(EmptyPlugin):
             # Transform data using pandas dataframe to format used in final table within MinIO
             source_name = source_name_template.format(name=os.path.splitext(file)[0], timestamp=ts)
             data = self.transform_input_data(data, source_name)
-            self.upload_data_on_trino(schema_name, data, conn)
+            self.upload_data_on_trino(schema_name, table_name, data, conn)
 
             # Delete file after upload
             os.remove(remove_file.format(filename=obj_name))
