@@ -75,15 +75,15 @@ class EmptyPlugin():
     def __store__(self, output_file: PluginActionResponse) -> PluginExchangeMetadata:
         files_created_on = []
         file_size = []
-        for file_name in output_file.file_name:
+        for file_name, file_content in zip(output_file.file_name, output_file.file_content):
             files_created_on.append(str(datetime.datetime.now()))
 
             # Create output file
             with open(f"{PLUGIN_OUTPUT_FILE_DEST}/{file_name}", 'wb') as dest_file:
-                dest_file.write(output_file.file_content.encode() if type(output_file.file_content)==str else output_file.file_content)
+                dest_file.write(file_content.encode() if type(file_content)==str else file_content)
 
             # Get its size
-            file_size.appned(os.path.getsize(f"{PLUGIN_OUTPUT_FILE_DEST}/{file_name}"))
+            file_size.append(os.path.getsize(f"{PLUGIN_OUTPUT_FILE_DEST}/{file_name}"))
 
         # Build Metadata
         out_meta = PluginExchangeMetadata(file_name=file_name,
