@@ -62,7 +62,6 @@ class GenericPlugin(EmptyPlugin):
         from botocore.client import Config
         import os
         import pandas as pd
-        import logging
         from trino.dbapi import connect
         from trino.auth import BasicAuthentication
 
@@ -115,7 +114,7 @@ class GenericPlugin(EmptyPlugin):
 
             # Delete file after upload
             os.remove(remove_file.format(filename=obj_name))
-            logging.info("Anonymized data are uploaded into MinIO storage.")
+            print("Anonymized data are uploaded into MinIO storage.")
 
         # Upload updated files to local MinIO storage
         for file, ts in zip(input_meta.file_name, input_meta.created_on):
@@ -130,6 +129,6 @@ class GenericPlugin(EmptyPlugin):
             # Delete file after upload
             os.remove(remove_file.format(filename=file))
 
-            logging.info("Original csv is updated")
+            print("Original csv is updated")
 
         return PluginActionResponse()
