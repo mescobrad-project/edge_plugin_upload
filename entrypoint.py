@@ -109,7 +109,8 @@ class GenericPlugin(EmptyPlugin):
             # Transform data using pandas dataframe to format used in final table within MinIO
             source_name = source_name_template.format(name=os.path.splitext(file)[0], timestamp=ts)
 
-            data = self.transform_input_data(data, source_name, input_meta.workspace_id)
+            data = self.transform_input_data(data, source_name,
+                                             input_meta.data_info['workspace_id'])
             self.upload_data_on_trino(schema_name, table_name, data, conn)
 
             # Delete file after upload
