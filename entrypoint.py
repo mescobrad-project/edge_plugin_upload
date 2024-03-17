@@ -57,6 +57,45 @@ class GenericPlugin(EmptyPlugin):
             .format(schema_name=schema_name, table_name=table_name, data=data_to_insert)
         self.execute_sql_on_trino(sql=sql_statement, conn=conn)
 
+    def update_filename_pid_mapping(self, obj_name, list_ids, s3_local):
+        import csv
+        import io
+
+        folder = "file_pid/"
+        filename = "filename_pid.csv"
+        file_path = f"{folder}{filename}"
+
+        # Column names od the csv file, where the mapping between file and patient
+        # personal ID is saved
+        key_values = ['filename', 'personal_id']
+
+        bucket_local = s3_local.Bucket(self.__OBJ_STORAGE_BUCKET_LOCAL__)
+        obj_files = bucket_local.objects.filter(Prefix=folder, Delimiter="/")
+
+        # Prepare data which needs to be saved (pairs of: (obj_name, personal_id))
+        data_id = list_ids.to_frame()
+        data_id.insert(0, key_values[0], obj_name)
+        data_to_append = data_id.values.tolist()
+
+        # If file where mapping is saved already exist, append data to file, and replace
+        # object in MinIO, otherise create new object and insert data
+        if (len(list(obj_files))) > 0:
+            existing_object = s3_local.Object(self.__OBJ_STORAGE_BUCKET_LOCAL__, file_path)
+            existing_data = existing_object.get()["Body"].read().decode('utf-8')
+            existing_rows = list(csv.reader(io.StringIO(existing_data)))
+            existing_rows.extend(data_to_append)
+
+            updated_data = io.StringIO()
+            csv.writer(updated_data).writerows(existing_rows)
+            s3_local.Bucket(self.__OBJ_STORAGE_BUCKET_LOCAL__).upload_fileobj(
+                io.BytesIO(updated_data.getvalue().encode('utf-8')), file_path)
+        else: # file doesn't exist, create file and insert data
+            file_data = [key_values, data_to_append]
+            updated_data = io.StringIO()
+            csv.writer(updated_data).writerows(file_data)
+            s3_local.Bucket(self.__OBJ_STORAGE_BUCKET_LOCAL__).upload_fileobj(
+                io.BytesIO(updated_data.getvalue().encode('utf-8')), file_path)
+
     def action(self, input_meta: PluginExchangeMetadata = None) -> PluginActionResponse:
         import boto3
         from botocore.client import Config
@@ -106,8 +145,12 @@ class GenericPlugin(EmptyPlugin):
             # Read data from anonymized parquet file
             data = pd.read_parquet(obj_name)
 
+            # Extract list of personal IDs
+            list_ids = data["PID"]
+
             # Transform data using pandas dataframe to format used in final table within MinIO
-            source_name = source_name_template.format(name=os.path.splitext(file)[0], timestamp=ts)
+            source_name = source_name_template.format(name=os.path.splitext(file)[0],
+                                                      timestamp=ts)
 
             data = self.transform_input_data(data, source_name,
                                              input_meta.data_info['workspace_id'])
@@ -120,12 +163,19 @@ class GenericPlugin(EmptyPlugin):
         # Upload updated files to local MinIO storage
         for file, ts in zip(input_meta.file_name, input_meta.created_on):
             data = self.__load__(file)
+
             obj_name = self.__OBJ_STORAGE_ARTEFACT_TEMPLATE_LOCAL__\
                 .replace('{name}', os.path.splitext(file)[0])\
                 .replace('{timestamp}', ts)
 
             # Upload updated data
-            s3_local.Bucket(self.__OBJ_STORAGE_BUCKET_LOCAL__).upload_fileobj(BytesIO(data), obj_name, ExtraArgs={'ContentType': input_meta.file_content_type})
+            s3_local.Bucket(self.__OBJ_STORAGE_BUCKET_LOCAL__).upload_fileobj(
+                BytesIO(data), obj_name,
+                ExtraArgs={'ContentType': input_meta.file_content_type})
+
+            # Update key value file for mapping files with the generated personal IDs, in
+            # local instance of MinIO
+            self.update_filename_pid_mapping(obj_name, list_ids, s3_local)
 
             # Delete file after upload
             os.remove(remove_file.format(filename=file))
