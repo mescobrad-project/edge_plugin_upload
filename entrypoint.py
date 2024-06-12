@@ -18,10 +18,17 @@ class GenericPlugin(EmptyPlugin):
         # Return the results
         return rows
 
-    def transform_input_data(self, data, source_name, workspace_id):
+    def transform_input_data(self, data, source_name, workspace_id, MRN,
+                             metadata_file_name):
         """Transform input data into table suitable for creating query"""
 
         data = data.reset_index(drop=True)
+
+        if MRN is not None:
+            data["MRN"] = MRN
+
+        if metadata_file_name is not None:
+            data["metadata_file_name"] = metadata_file_name
 
         # Add rowid column representing id of the row in the file
         data["rowid"] = data.index + 1
@@ -123,6 +130,16 @@ class GenericPlugin(EmptyPlugin):
             s3_local.Bucket(self.__OBJ_STORAGE_BUCKET_LOCAL__).upload_fileobj(
                 io.BytesIO(updated_data.getvalue().encode('utf-8')), file_path)
 
+    def upload_metadata_file(self, metadata_file_name, metadata_content, s3_data_lake):
+        "Upload metadata files to support FAIR process and make data interoperable"
+
+        obj_name = f"metadata_files/{metadata_file_name}"
+        s3_data_lake.Bucket(self.__OBJ_STORAGE_BUCKET__).upload_fileobj(
+            BytesIO(metadata_content), obj_name, ExtraArgs={'ContentType': "text/json"})
+
+        print(f"\nMetadata file {metadata_file_name} is attached to the data.")
+
+
     def action(self, input_meta: PluginExchangeMetadata = None) -> PluginActionResponse:
         import boto3
         from botocore.client import Config
@@ -149,6 +166,14 @@ class GenericPlugin(EmptyPlugin):
                     config=Config(signature_version='s3v4'),
                     region_name=self.__OBJ_STORAGE_REGION__)
 
+        # Init MinIO cloud client
+        s3_data_lake = boto3.resource('s3',
+                        endpoint_url= self.__OBJ_STORAGE_URL__,
+                        aws_access_key_id= self.__OBJ_STORAGE_ACCESS_ID__,
+                        aws_secret_access_key= self.__OBJ_STORAGE_ACCESS_SECRET__,
+                        config=Config(signature_version='s3v4'),
+                        region_name=self.__OBJ_STORAGE_REGION__)
+
         # Get the schema name, schema in Trino is an equivalent to a bucket in MinIO
         # Trino doesn't allow to have "-" in schema name so it needs to be replaced
         # with "_"
@@ -162,6 +187,9 @@ class GenericPlugin(EmptyPlugin):
 
         # Source name with the timestamp to add in table within column source
         source_name_template = "{name}_{timestamp}.csv"
+
+        # Metadata file template
+        metadata_file_template = "{name}_{timestamp}.json"
 
         # Path to file to remove
         remove_file = "./{filename}"
@@ -181,9 +209,24 @@ class GenericPlugin(EmptyPlugin):
             source_name = source_name_template.format(name=os.path.splitext(file)[0],
                                                       timestamp=ts)
 
+            if input_meta.data_info["metadata_json_file"] is not None:
+                metadata_file_name = metadata_file_template.format(
+                    name=os.path.splitext(file)[0], timestamp=ts)
+            else:
+                metadata_file_name = None
+
             data = self.transform_input_data(data, source_name,
-                                             input_meta.data_info['workspace_id'])
+                                             input_meta.data_info['workspace_id'],
+                                             input_meta.data_info['MRN'],
+                                             metadata_file_name)
+
             self.upload_data_on_trino(schema_name, table_name, data, conn)
+
+            # Upload metadata file
+            if input_meta.data_info["metadata_json_file"] is not None:
+                self.upload_metadata_file(metadata_file_name,
+                                          input_meta.data_info["metadata_json_file"],
+                                          s3_data_lake)
 
             # Delete file after upload
             os.remove(remove_file.format(filename=obj_name))
