@@ -18,14 +18,11 @@ class GenericPlugin(EmptyPlugin):
         # Return the results
         return rows
 
-    def transform_input_data(self, data, source_name, workspace_id, MRN,
+    def transform_input_data(self, data, source_name, workspace_id,
                              metadata_file_name):
         """Transform input data into table suitable for creating query"""
 
         data = data.reset_index(drop=True)
-
-        if MRN is not None:
-            data["MRN"] = MRN
 
         if metadata_file_name is not None:
             data["metadata_file_name"] = metadata_file_name
@@ -91,7 +88,8 @@ class GenericPlugin(EmptyPlugin):
         sys.stdout.flush()
         sleep(0.002)
 
-    def update_filename_pid_mapping(self, obj_name, list_ids, s3_local):
+    def update_filename_pid_mapping(self, obj_name, list_ids, pseudoMRN_list,
+                                    list_mrn, s3_local):
         import csv
         import io
 
@@ -101,7 +99,7 @@ class GenericPlugin(EmptyPlugin):
 
         # Column names od the csv file, where the mapping between file and patient
         # personal ID is saved
-        key_values = ['filename', 'personal_id']
+        key_values = ['filename', 'personal_id', 'pseudoMRN', 'MRN']
 
         bucket_local = s3_local.Bucket(self.__OBJ_STORAGE_BUCKET_LOCAL__)
         obj_files = bucket_local.objects.filter(Prefix=folder, Delimiter="/")
@@ -109,6 +107,8 @@ class GenericPlugin(EmptyPlugin):
         # Prepare data which needs to be saved (pairs of: (obj_name, personal_id))
         data_id = list_ids.to_frame()
         data_id.insert(0, key_values[0], obj_name)
+        data_id.insert(2, key_values[2], pseudoMRN_list)
+        data_id.insert(3, key_values[3], list_mrn)
         data_to_append = data_id.values.tolist()
 
         # If file where mapping is saved already exist, append data to file, and replace
@@ -118,6 +118,10 @@ class GenericPlugin(EmptyPlugin):
             existing_data = existing_object.get()["Body"].read().decode('utf-8')
             existing_rows = list(csv.reader(io.StringIO(existing_data)))
             existing_rows.extend(data_to_append)
+
+            # Update column names
+            if any(col_name not in existing_rows[0] for col_name in key_values):
+                existing_rows[0] = key_values
 
             updated_data = io.StringIO()
             csv.writer(updated_data).writerows(existing_rows)
@@ -202,9 +206,6 @@ class GenericPlugin(EmptyPlugin):
             # Read data from anonymized parquet file
             data = pd.read_parquet(obj_name)
 
-            # Extract list of personal IDs
-            list_ids = data["PID"]
-
             # Transform data using pandas dataframe to format used in final table within MinIO
             source_name = source_name_template.format(name=os.path.splitext(file)[0],
                                                       timestamp=ts)
@@ -217,7 +218,6 @@ class GenericPlugin(EmptyPlugin):
 
             data = self.transform_input_data(data, source_name,
                                              input_meta.data_info['workspace_id'],
-                                             input_meta.data_info['MRN'],
                                              metadata_file_name)
 
             self.upload_data_on_trino(schema_name, table_name, data, conn)
@@ -230,7 +230,7 @@ class GenericPlugin(EmptyPlugin):
 
             # Delete file after upload
             os.remove(remove_file.format(filename=obj_name))
-            print("Anonymized data are uploaded into MinIO storage.")
+            print("\nAnonymized data are uploaded into MinIO storage.\n")
 
         # Upload updated files to local MinIO storage
         for file, ts in zip(input_meta.file_name, input_meta.created_on):
@@ -245,9 +245,22 @@ class GenericPlugin(EmptyPlugin):
                 BytesIO(data), obj_name,
                 ExtraArgs={'ContentType': input_meta.file_content_type})
 
+            # Read data from non-anonymized parquet file
+            data_pq_non_anon = pd.read_parquet(file)
+
+            # Extract list of personal IDs
+            list_ids = data_pq_non_anon["PID"]
+
+            # Extract list of the pseudoMRN
+            pseudoMRN_list = data_pq_non_anon['pseudoMRN']
+
+            # Extract list of MRN if exists, otherwise MRN is list of None
+            list_mrn = data_pq_non_anon['MRN'] if 'MRN' in data_pq_non_anon.columns else [None] * len(pseudoMRN_list)
+
             # Update key value file for mapping files with the generated personal IDs, in
             # local instance of MinIO
-            self.update_filename_pid_mapping(obj_name, list_ids, s3_local)
+            self.update_filename_pid_mapping(obj_name, list_ids, pseudoMRN_list,
+                                             list_mrn, s3_local)
 
             # Delete file after upload
             os.remove(remove_file.format(filename=file))
