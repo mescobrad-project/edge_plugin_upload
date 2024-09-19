@@ -151,120 +151,131 @@ class GenericPlugin(EmptyPlugin):
         import pandas as pd
         from trino.dbapi import connect
         from trino.auth import BasicAuthentication
+        try:
+            # Initialize the connection with Trino
+            conn = connect(
+                host=self.__TRINO_HOST__,
+                port=self.__TRINO_PORT__,
+                http_scheme="https",
+                auth=BasicAuthentication(self.__TRINO_USER__, self.__TRINO_PASSWORD__),
+                max_attempts=1,
+                request_timeout=600
+            )
 
-        # Initialize the connection with Trino
-        conn = connect(
-            host=self.__TRINO_HOST__,
-            port=self.__TRINO_PORT__,
-            http_scheme="https",
-            auth=BasicAuthentication(self.__TRINO_USER__, self.__TRINO_PASSWORD__),
-            max_attempts=1,
-            request_timeout=600
-        )
-
-        # Initialize local MinIO client
-        s3_local = boto3.resource('s3',
-                    endpoint_url= self.__OBJ_STORAGE_URL_LOCAL__,
-                    aws_access_key_id= self.__OBJ_STORAGE_ACCESS_ID_LOCAL__,
-                    aws_secret_access_key= self.__OBJ_STORAGE_ACCESS_SECRET_LOCAL__,
-                    config=Config(signature_version='s3v4'),
-                    region_name=self.__OBJ_STORAGE_REGION__)
-
-        # Init MinIO cloud client
-        s3_data_lake = boto3.resource('s3',
-                        endpoint_url= self.__OBJ_STORAGE_URL__,
-                        aws_access_key_id= self.__OBJ_STORAGE_ACCESS_ID__,
-                        aws_secret_access_key= self.__OBJ_STORAGE_ACCESS_SECRET__,
+            # Initialize local MinIO client
+            s3_local = boto3.resource('s3',
+                        endpoint_url= self.__OBJ_STORAGE_URL_LOCAL__,
+                        aws_access_key_id= self.__OBJ_STORAGE_ACCESS_ID_LOCAL__,
+                        aws_secret_access_key= self.__OBJ_STORAGE_ACCESS_SECRET_LOCAL__,
                         config=Config(signature_version='s3v4'),
                         region_name=self.__OBJ_STORAGE_REGION__)
 
-        # Get the schema name, schema in Trino is an equivalent to a bucket in MinIO
-        # Trino doesn't allow to have "-" in schema name so it needs to be replaced
-        # with "_"
-        schema_name = self.__OBJ_STORAGE_BUCKET__.replace("-", "_")
+            # Init MinIO cloud client
+            s3_data_lake = boto3.resource('s3',
+                            endpoint_url= self.__OBJ_STORAGE_URL__,
+                            aws_access_key_id= self.__OBJ_STORAGE_ACCESS_ID__,
+                            aws_secret_access_key= self.__OBJ_STORAGE_ACCESS_SECRET__,
+                            config=Config(signature_version='s3v4'),
+                            region_name=self.__OBJ_STORAGE_REGION__)
 
-        # Get the table name
-        table_name = self.__OBJ_STORAGE_TABLE__.replace("-", "_")
+            # Get the schema name, schema in Trino is an equivalent to a bucket in MinIO
+            # Trino doesn't allow to have "-" in schema name so it needs to be replaced
+            # with "_"
+            schema_name = self.__OBJ_STORAGE_BUCKET__.replace("-", "_")
 
-        # Path to the anonymized file
-        obj_name_template = "anonymous_data/{name}"
+            # Get the table name
+            table_name = self.__OBJ_STORAGE_TABLE__.replace("-", "_")
 
-        # Source name with the timestamp to add in table within column source
-        source_name_template = "{name}_{timestamp}.csv"
+            # Path to the anonymized file
+            obj_name_template = "anonymous_data/{name}"
 
-        # Metadata file template
-        metadata_file_template = "{name}_{timestamp}.json"
+            # Source name to add in table within column source
+            source_name_template = "{name}.csv"
 
-        # Path to file to remove
-        remove_file = "./{filename}"
+            # Metadata file template
+            metadata_file_template = "{name}.json"
 
-        # Transform anonymized data into the appropriate form to upload with Trino
-        # and perform the uploading of the anonymized data
-        for file, ts in zip(input_meta.file_name, input_meta.created_on):
-            obj_name = obj_name_template.format(name=file)
+            # Path to file to remove
+            remove_file = "./{filename}"
 
-            # Read data from anonymized parquet file
-            data = pd.read_parquet(obj_name)
+            # Transform anonymized data into the appropriate form to upload with Trino
+            # and perform the uploading of the anonymized data
+            for file in input_meta.file_name:
+                obj_name = obj_name_template.format(name=file)
 
-            # Transform data using pandas dataframe to format used in final table within MinIO
-            source_name = source_name_template.format(name=os.path.splitext(file)[0],
-                                                      timestamp=ts)
+                # Read data from anonymized parquet file
+                data = pd.read_parquet(obj_name)
 
-            if input_meta.data_info["metadata_json_file"] is not None:
-                metadata_file_name = metadata_file_template.format(
-                    name=os.path.splitext(file)[0], timestamp=ts)
-            else:
-                metadata_file_name = None
+                # Transform data using pandas dataframe to format used in final table within MinIO
+                source_name = source_name_template.format(name=os.path.splitext(file)[0])
 
-            data = self.transform_input_data(data, source_name,
-                                             input_meta.data_info['workspace_id'],
-                                             metadata_file_name)
+                if input_meta.data_info["metadata_json_file"] is not None:
+                    metadata_file_name = metadata_file_template.format(
+                        name=os.path.splitext(file)[0])
+                else:
+                    metadata_file_name = None
 
-            self.upload_data_on_trino(schema_name, table_name, data, conn)
+                data = self.transform_input_data(data, source_name,
+                                                 input_meta.data_info['workspace_id'],
+                                                 metadata_file_name)
 
-            # Upload metadata file
-            if input_meta.data_info["metadata_json_file"] is not None:
-                self.upload_metadata_file(metadata_file_name,
-                                          input_meta.data_info["metadata_json_file"],
-                                          s3_data_lake)
+                self.upload_data_on_trino(schema_name, table_name, data, conn)
 
-            # Delete file after upload
-            os.remove(remove_file.format(filename=obj_name))
-            print("\nAnonymized data are uploaded into MinIO storage.\n")
+                # Upload metadata file
+                if input_meta.data_info["metadata_json_file"] is not None:
+                    self.upload_metadata_file(metadata_file_name,
+                                              input_meta.data_info["metadata_json_file"],
+                                              s3_data_lake)
 
-        # Upload updated files to local MinIO storage
-        for file, ts in zip(input_meta.file_name, input_meta.created_on):
-            data = self.__load__(file)
+                # Delete file after upload
+                os.remove(remove_file.format(filename=obj_name))
+                print("\nAnonymized data are uploaded into MinIO storage.\n")
 
-            obj_name = self.__OBJ_STORAGE_ARTEFACT_TEMPLATE_LOCAL__\
-                .replace('{name}', os.path.splitext(file)[0])\
-                .replace('{timestamp}', ts)
+            # Upload updated files to local MinIO storage
+            for file in input_meta.file_name:
+                data = self.__load__(file)
 
-            # Upload updated data
-            s3_local.Bucket(self.__OBJ_STORAGE_BUCKET_LOCAL__).upload_fileobj(
-                BytesIO(data), obj_name,
-                ExtraArgs={'ContentType': input_meta.file_content_type})
+                obj_name = self.__OBJ_STORAGE_ARTEFACT_TEMPLATE_LOCAL__\
+                    .replace('{name}', os.path.splitext(file)[0])
 
-            # Read data from non-anonymized parquet file
-            data_pq_non_anon = pd.read_parquet(file)
+                # Upload updated data
+                s3_local.Bucket(self.__OBJ_STORAGE_BUCKET_LOCAL__).upload_fileobj(
+                    BytesIO(data), obj_name,
+                    ExtraArgs={'ContentType': input_meta.file_content_type})
 
-            # Extract list of personal IDs
-            list_ids = data_pq_non_anon["PID"]
+                # Read data from non-anonymized parquet file
+                data_pq_non_anon = pd.read_parquet(file)
 
-            # Extract list of the pseudoMRN
-            pseudoMRN_list = data_pq_non_anon['pseudoMRN']
+                # Extract list of personal IDs
+                list_ids = data_pq_non_anon["PID"]
 
-            # Extract list of MRN if exists, otherwise MRN is list of None
-            list_mrn = data_pq_non_anon['MRN'] if 'MRN' in data_pq_non_anon.columns else [None] * len(pseudoMRN_list)
+                # Extract list of the pseudoMRN
+                pseudoMRN_list = data_pq_non_anon['pseudoMRN']
 
-            # Update key value file for mapping files with the generated personal IDs, in
-            # local instance of MinIO
-            self.update_filename_pid_mapping(obj_name, list_ids, pseudoMRN_list,
-                                             list_mrn, s3_local)
+                # Extract list of MRN if exists, otherwise MRN is list of None
+                list_mrn = data_pq_non_anon['MRN'] if 'MRN' in data_pq_non_anon.columns else [None] * len(pseudoMRN_list)
 
-            # Delete file after upload
-            os.remove(remove_file.format(filename=file))
+                # Update key value file for mapping files with the generated personal IDs, in
+                # local instance of MinIO
+                self.update_filename_pid_mapping(obj_name, list_ids,
+                                                 pseudoMRN_list, list_mrn,
+                                                 s3_local)
 
-            print("Original csv is updated")
+                # Delete file after upload
+                os.remove(remove_file.format(filename=file))
+
+                print("Original csv is updated")
+
+        except Exception as e:
+            print("CSV processing failed with error: " + str(e))
+
+        finally:
+            if input_meta.file_name:
+                anonymized_file = "anonymous_data/" + input_meta.file_name[0]
+                original_file = input_meta.file_name[0]
+                if os.path.exists("./" + anonymized_file):
+                    os.remove("./" + anonymized_file)
+                if os.path.exists("./" + original_file):
+                    os.remove("./" + original_file)
 
         return PluginActionResponse()
